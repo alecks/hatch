@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"path/filepath"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/urfave/cli/v3"
@@ -14,49 +15,80 @@ import (
 
 type contextKey string
 
-const definitionKey contextKey = "definition"
+const (
+	definitionKey contextKey = "definition"
+
+	flagDir       string = "dir"
+	flagVerbose   string = "verbose"
+	argSourcePath string = "source"
+	argDestPath   string = "dest"
+
+	// 0755: owner read/write, others read (+execute)
+	hatchDirPerms  os.FileMode = 0755
+	hatchConfigDir string      = "config"
+)
 
 func main() {
-	dirname, err := os.UserHomeDir()
+	cwdPath, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to get user home dir: %v\n", err)
+		fmt.Fprintf(os.Stderr, "failed to get cwd: %v", err)
 		os.Exit(1)
-	}
-	hatchfileFlag := &cli.StringFlag{
-		Name:        "hatchfile",
-		Aliases:     []string{"f"},
-		Usage:       "path to the hatchfile",
-		Value:       path.Join(dirname, ".hatch", "hatchfile.toml"),
-		DefaultText: "~/.hatch/hatchfile.toml",
 	}
 
 	cmd := &cli.Command{
-		Name:        "hatch",
-		Usage:       "a tool for documenting and reusing configurations on small servers and workstations",
-		Version:     "0.1.0",
-		Description: "hatch is a tool for documenting and reusing configurations on small servers and workstations. It uses the HCL configuration language to define configurations, systemd services, Docker containers and other resources.",
-		Flags:       []cli.Flag{hatchfileFlag},
+		Name:    "hatch",
+		Usage:   "a tool for documenting and reusing configurations on small servers and workstations",
+		Version: "0.1.0",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:        flagDir,
+				Aliases:     []string{"d"},
+				Usage:       "path to the hatch project dir",
+				Value:       path.Join(cwdPath, "hatch"),
+				DefaultText: "./hatch/",
+			},
+			&cli.BoolFlag{
+				Name:        flagVerbose,
+				Aliases:     []string{"v"},
+				Usage:       "set log level to debug",
+				Value:       false,
+				DefaultText: "false",
+			},
+		},
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-			path := cmd.String("hatchfile")
-			slog.Debug("attempting to open hatchfile", "path", path)
+			if cmd.Bool(flagVerbose) {
+				slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			}
 
-			file, err := os.Open(path)
+			dirPath := cmd.String(flagDir)
+			filePath := filepath.Join(dirPath, "hatchfile.toml")
+			slog.Debug("attempting to open hatchfile", "path", dirPath)
+
+			file, err := os.Open(filePath)
 			if errors.Is(err, os.ErrNotExist) {
-				slog.Debug("hatchfile does not exist, creating one", "path", path)
-				file, err = os.Create(path)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "failed to create hatchfile (%s): %v\n", path, err)
-					os.Exit(1)
+				slog.Debug("hatchfile does not exist, creating", "path", filePath)
+
+				if err := os.MkdirAll(dirPath, hatchDirPerms); err != nil {
+					return ctx, fmt.Errorf("failed to create hatch project directory (%s): %v", filepath.Dir(dirPath), err)
 				}
-			}
+				file, err = os.Create(filePath)
+				if err != nil {
+					return ctx, fmt.Errorf("failed to create hatchfile (%s): %v", filePath, err)
+				}
+				defer file.Close()
 
-			var definition *Definition
+				toml.NewEncoder(file).Encode(&Definition{
+					Name: filepath.Base(dirPath),
+				})
+			}
+			defer file.Close()
+
+			definition := &Definition{}
 			if err := toml.NewDecoder(file).Decode(definition); err != nil {
-				fmt.Fprintf(os.Stderr, "failed to decode hatchfile (%s): %v\n", path, err)
-				os.Exit(1)
+				return ctx, fmt.Errorf("failed to decode hatchfile (%s): %v", dirPath, err)
 			}
 
-			slog.Debug("loaded hatchfile", "path", path, "definition", definition)
+			slog.Debug("loaded hatchfile", "path", dirPath, "definition", definition)
 			return context.WithValue(ctx, definitionKey, definition), nil
 		},
 		Commands: []*cli.Command{
@@ -87,10 +119,18 @@ func main() {
 				Commands: []*cli.Command{
 					{
 						Name:  "add",
-						Usage: "add a configuration file to the hatch defnition",
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return errors.New("not implemented")
+						Usage: "add a configuration file to the hatch definition",
+						Arguments: []cli.Argument{
+							&cli.StringArg{
+								Name:      "source-path",
+								UsageText: "the local configuration file to add to the hatch definition",
+							},
+							&cli.StringArg{
+								Name:      "dest-path",
+								UsageText: "the path where the configuration file should be placed on the target machine",
+							},
 						},
+						Action: addConfigCmd,
 					},
 					{
 						Name:    "remove",
@@ -106,7 +146,7 @@ func main() {
 	}
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "failed: %v\n", err)
 		os.Exit(1)
 	}
 }

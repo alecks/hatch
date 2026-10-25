@@ -1,19 +1,25 @@
 package main
 
-type Definition struct {
-	Configs []Config `toml:"config,omitempty"`
-}
+import "errors"
 
-type Id string
 type Path string
 
+type Definition struct {
+	Name        string   `toml:"name"`
+	Description string   `toml:"description,omitempty"`
+	Configs     []Config `toml:"config,omitempty"`
+}
+
 type Resource struct {
-	Id        Id   `toml:"id"`
-	DependsOn []Id `toml:"depends_on,omitempty"`
+	Name      string   `toml:"id"`
+	DependsOn []string `toml:"depends_on,omitempty"`
 }
 
 type Config struct {
 	Resource
-	SourcePath Path `toml:"source"`
-	DestPath   Path `toml:"dest"`
+	DestPath Path `toml:"dest"`
+}
+
+func (d *Definition) Write() error {
+	return errors.New("not implemented")
 }
