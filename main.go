@@ -72,8 +72,6 @@ func main() {
 				filePath: filePath,
 			}
 
-			slog.Debug("attempting to open hatchfile", "path", dirPath)
-
 			file, err := os.Open(filePath)
 			if errors.Is(err, os.ErrNotExist) {
 				slog.Debug("hatchfile does not exist, creating", "path", filePath)
@@ -90,6 +88,7 @@ func main() {
 				definition.Write()
 			}
 			defer file.Close()
+			slog.Debug("opened hatchfile", "path", dirPath)
 
 			return context.WithValue(ctx, definitionKey, definition), nil
 		},
