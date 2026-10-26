@@ -15,16 +15,16 @@ import (
 type contextKey string
 
 const (
-	definitionKey contextKey = "definition"
+	contextDefinition contextKey = "definition"
 
-	flagDir          string = "dir"
-	flagVerbose      string = "verbose"
-	flagResourceName string = "resource"
-	flagDependsOn    string = "depends"
-	flagRecursive    string = "recursive"
+	flagDir       string = "dir"
+	flagVerbose   string = "verbose"
+	flagDependsOn string = "depends"
+	flagRecursive string = "recursive"
 
-	argSourcePath string = "source"
-	argDestPath   string = "dest"
+	argResourceName string = "resource"
+	argSourcePath   string = "source"
+	argDestPath     string = "dest"
 
 	// 0755: owner read/write/execute, others read/execute)
 	hatchDirPerms os.FileMode = 0755
@@ -90,7 +90,7 @@ func main() {
 			defer file.Close()
 			slog.Debug("opened hatchfile", "path", dirPath)
 
-			return context.WithValue(ctx, definitionKey, definition), nil
+			return context.WithValue(ctx, contextDefinition, definition), nil
 		},
 		Commands: []*cli.Command{
 			{
@@ -122,24 +122,24 @@ func main() {
 						Name:  "add",
 						Usage: "add a configuration resource to the hatch definition",
 						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:     flagResourceName,
-								Aliases:  []string{"n"},
-								Usage:    "name of the resource to add",
-								Required: true,
-							},
 							&cli.StringSliceFlag{
 								Name:  flagDependsOn,
 								Usage: "names of other resources that this resource depends on",
 							},
 							&cli.BoolFlag{
 								Name:        flagRecursive,
+								Aliases:     []string{"r"},
 								Usage:       "allow adding a directory as a configuration resource",
 								Value:       false,
 								DefaultText: "false",
 							},
 						},
 						Arguments: []cli.Argument{
+							&cli.StringArg{
+								Name:      argResourceName,
+								UsageText: "resource-name",
+								Required:  true,
+							},
 							&cli.StringArg{
 								Name:      argSourcePath,
 								UsageText: "source-path",
@@ -157,9 +157,14 @@ func main() {
 						Name:    "remove",
 						Aliases: []string{"rm"},
 						Usage:   "remove a configuration resource from the hatch definition",
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return errors.New("not implemented")
+						Arguments: []cli.Argument{
+							&cli.StringArg{
+								Name:      argResourceName,
+								UsageText: "resource-name",
+								Required:  true,
+							},
 						},
+						Action: removeConfigCmd,
 					},
 				},
 			},

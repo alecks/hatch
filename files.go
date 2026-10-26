@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
 // writeFileAtomic writes a file atomically by writing to a temp file then renaming.
 //
-// Adapted from https://github.com/tailscale/tailscale/blob/main/atomicfile/atomicfile.go
+// Adapted from https://github.com/tailscale/tailscale/blob/main/atomicfile/atomicfile.go, Windows fixes removed.
 // Copyright (c) Tailscale Inc & contributors.
 // SPDX-License-Identifier: BSD-3-Clause.
 func writeFileAtomic(filename string, data []byte, perm os.FileMode) (err error) {
@@ -34,10 +33,8 @@ func writeFileAtomic(filename string, data []byte, perm os.FileMode) (err error)
 	if _, err := f.Write(data); err != nil {
 		return err
 	}
-	if runtime.GOOS != "windows" {
-		if err := f.Chmod(perm); err != nil {
-			return err
-		}
+	if err := f.Chmod(perm); err != nil {
+		return err
 	}
 	if err := f.Sync(); err != nil {
 		return err
