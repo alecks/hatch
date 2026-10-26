@@ -2,53 +2,82 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
+	"strings"
 
 	"github.com/urfave/cli/v3"
 )
 
 func addConfigCmd(ctx context.Context, cmd *cli.Command) error {
-	definition := ctx.Value(definitionKey)
+	definition := ctx.Value(definitionKey).(*Definition)
 	if definition == nil {
-		return fmt.Errorf("missing definition (this should not happen)")
+		panic("definition missing, this should not happen")
 	}
-	definitionDir := cmd.String(flagDir)
+	if err := definition.Read(); err != nil {
+		return fmt.Errorf("read in definition file (%s): %w", definition.filePath, err)
+	}
 
+	resourceName := cmd.String(flagResourceName)
+	definitionDir := filepath.Dir(definition.filePath)
 	configDir := filepath.Join(definitionDir, "config")
-	_ = Config{
-		// TODO: use incremental instead
-		Name:     filepath.Base(definitionDir) + "-" + strconv.Itoa(rand.IntN(1000)),
-		DestPath: Path(cmd.StringArg(argDestPath)),
+	destPath := cmd.StringArg(argDestPath)
+	sourcePath := cmd.StringArg(argSourcePath)
+	// TODO: ensure storepath doesn't escape configDir
+	storePath := filepath.Join(configDir, strings.TrimPrefix(destPath, "/"))
+	storeDir := filepath.Dir(storePath)
+
+	if !filepath.IsAbs(destPath) {
+		return fmt.Errorf("dest-path must be an absolute path (%s)", destPath)
 	}
 
-	sourcePath := cmd.StringArg(argSourcePath)
+	if existing, ok := definition.Configs[resourceName]; ok {
+		return fmt.Errorf("a config with the same resource name already exists in this definition (its destPath: %s)", existing.DestPath)
+	}
+	if _, err := os.Stat(storePath); err == nil {
+		return fmt.Errorf("a config with the same path already exists in this project")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat %s: %w", storePath, err)
+	}
+
 	sourceFile, err := os.Open(sourcePath)
 	if err != nil {
-		return fmt.Errorf("failed to open source file (%s), err: %v", sourcePath, err)
+		return fmt.Errorf("open source file (%s): %w", sourcePath, err)
 	}
 	defer sourceFile.Close()
 
-	err = os.MkdirAll(configDir, 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create config dir at %s (used for storing added configurations), err: %v", configDir, err)
+	if err := os.MkdirAll(storeDir, hatchDirPerms); err != nil {
+		return fmt.Errorf("create store directory (%s): %w", storeDir, err)
 	}
+	slog.Debug("created store directory", "storeDir", storeDir)
 
-	storePath := filepath.Join(configDir, cmd.StringArg("dest-path"))
-	storeFile, err := os.Open(storePath)
+	storeFile, err := os.Create(storePath)
 	if err != nil {
-		return fmt.Errorf("failed to open store file (%s), err: %v", storePath, err)
+		return fmt.Errorf("create store file (%s): %w", storePath, err)
 	}
 	defer storeFile.Close()
+	slog.Debug("created store file for added config", "storePath", storePath)
 
 	_, err = io.Copy(storeFile, sourceFile)
 	if err != nil {
-		return fmt.Errorf("failed to copy source file to store file: %s -> %s, error: %v", sourcePath, storePath, err)
+		slog.Debug("cleanup: removing store file due to failed copy", "storePath", storePath)
+		os.Remove(storePath)
+		return fmt.Errorf("copy source file to store file (%s -> %s): %w", sourcePath, storePath, err)
 	}
 
+	definition.Configs[resourceName] = Config{
+		DestPath:  destPath,
+		DependsOn: cmd.StringSlice(flagDependsOn),
+	}
+	if err := definition.Write(); err != nil {
+		slog.Debug("cleanup: removing store file due to failed definition write", "storePath", storePath)
+		os.Remove(storePath)
+		return fmt.Errorf("write definition file atomically (%s): %w", definition.filePath, err)
+	}
+	slog.Debug("wrote definition for added config resource", "definitionPath", definition.filePath)
 	return nil
 }

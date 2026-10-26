@@ -9,7 +9,6 @@ import (
 	"path"
 	"path/filepath"
 
-	"github.com/pelletier/go-toml/v2"
 	"github.com/urfave/cli/v3"
 )
 
@@ -18,13 +17,19 @@ type contextKey string
 const (
 	definitionKey contextKey = "definition"
 
-	flagDir       string = "dir"
-	flagVerbose   string = "verbose"
+	flagDir          string = "dir"
+	flagVerbose      string = "verbose"
+	flagResourceName string = "resource"
+	flagDependsOn    string = "depends"
+	flagRecursive    string = "recursive"
+
 	argSourcePath string = "source"
 	argDestPath   string = "dest"
 
-	// 0755: owner read/write, others read (+execute)
-	hatchDirPerms  os.FileMode = 0755
+	// 0755: owner read/write/execute, others read/execute)
+	hatchDirPerms os.FileMode = 0755
+	// 0644: owner read/write, others read-only
+	hatchFilePerms os.FileMode = 0644
 	hatchConfigDir string      = "config"
 )
 
@@ -62,6 +67,11 @@ func main() {
 
 			dirPath := cmd.String(flagDir)
 			filePath := filepath.Join(dirPath, "hatchfile.toml")
+			definition := &Definition{
+				Name:     filepath.Base(dirPath),
+				filePath: filePath,
+			}
+
 			slog.Debug("attempting to open hatchfile", "path", dirPath)
 
 			file, err := os.Open(filePath)
@@ -77,18 +87,10 @@ func main() {
 				}
 				defer file.Close()
 
-				toml.NewEncoder(file).Encode(&Definition{
-					Name: filepath.Base(dirPath),
-				})
+				definition.Write()
 			}
 			defer file.Close()
 
-			definition := &Definition{}
-			if err := toml.NewDecoder(file).Decode(definition); err != nil {
-				return ctx, fmt.Errorf("failed to decode hatchfile (%s): %v", dirPath, err)
-			}
-
-			slog.Debug("loaded hatchfile", "path", dirPath, "definition", definition)
 			return context.WithValue(ctx, definitionKey, definition), nil
 		},
 		Commands: []*cli.Command{
@@ -119,15 +121,35 @@ func main() {
 				Commands: []*cli.Command{
 					{
 						Name:  "add",
-						Usage: "add a configuration file to the hatch definition",
+						Usage: "add a configuration resource to the hatch definition",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     flagResourceName,
+								Aliases:  []string{"n"},
+								Usage:    "name of the resource to add",
+								Required: true,
+							},
+							&cli.StringSliceFlag{
+								Name:  flagDependsOn,
+								Usage: "names of other resources that this resource depends on",
+							},
+							&cli.BoolFlag{
+								Name:        flagRecursive,
+								Usage:       "allow adding a directory as a configuration resource",
+								Value:       false,
+								DefaultText: "false",
+							},
+						},
 						Arguments: []cli.Argument{
 							&cli.StringArg{
-								Name:      "source-path",
-								UsageText: "the local configuration file to add to the hatch definition",
+								Name:      argSourcePath,
+								UsageText: "source-path",
+								Required:  true,
 							},
 							&cli.StringArg{
-								Name:      "dest-path",
-								UsageText: "the path where the configuration file should be placed on the target machine",
+								Name:      argDestPath,
+								UsageText: "dest-path",
+								Required:  true,
 							},
 						},
 						Action: addConfigCmd,
@@ -135,7 +157,7 @@ func main() {
 					{
 						Name:    "remove",
 						Aliases: []string{"rm"},
-						Usage:   "remove a configuration file from the hatch definition",
+						Usage:   "remove a configuration resource from the hatch definition",
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							return errors.New("not implemented")
 						},
@@ -146,7 +168,7 @@ func main() {
 	}
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		fmt.Fprintf(os.Stderr, "failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
