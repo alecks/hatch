@@ -21,11 +21,11 @@ func addConfigCmd(ctx context.Context, cmd *cli.Command) error {
 	}
 	unlock, err := definition.Lock()
 	if err != nil {
-		return fmt.Errorf("acquire definition file lock (%s): %w", definition.filePath, err)
+		return err
 	}
 	defer unlock()
 	if err := definition.Read(); err != nil {
-		return fmt.Errorf("read definition file (%s): %w", definition.filePath, err)
+		return err
 	}
 
 	recursive := cmd.Bool(flagRecursive)
@@ -42,12 +42,12 @@ func addConfigCmd(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	if _, ok := definition.Resources[resourceName]; ok {
-		return fmt.Errorf("a resource with the same name already exists in this definition")
+		return errorResourceExists(resourceName)
 	}
 	if _, err := os.Stat(storePath); err == nil {
 		return fmt.Errorf("a config with the same path already exists in this definition")
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stat %s: %w", storePath, err)
+		return err
 	}
 
 	sourceIsDir := false
@@ -61,7 +61,7 @@ func addConfigCmd(ctx context.Context, cmd *cli.Command) error {
 				}
 				slog.Debug("copied source dir to store dir (recursive = true)", "sourcePath", sourcePath, "storePath", storePath)
 			} else {
-				fmt.Fprintf(os.Stderr, "warning: -r passed, but source-path is not a directory")
+				fmt.Fprintf(os.Stderr, "warning: -r passed, but source-path is not a directory\n")
 			}
 		} else {
 			return fmt.Errorf("stat source path at %s (recursive = true): %w", sourcePath, err)
@@ -79,13 +79,13 @@ func addConfigCmd(ctx context.Context, cmd *cli.Command) error {
 
 		storeDir := filepath.Dir(storePath)
 		if err := os.MkdirAll(storeDir, hatchDirPerms); err != nil {
-			return fmt.Errorf("create store directory at %s (recursive = false): %w", storeDir, err)
+			return err
 		}
 		slog.Debug("created store directory (recursive = false)", "storeDir", storeDir)
 
 		storeFile, err := os.Create(storePath)
 		if err != nil {
-			return fmt.Errorf("create store file (%s): %w", storePath, err)
+			return err
 		}
 		defer storeFile.Close()
 		slog.Debug("created store file for added config (recursive = false)", "storePath", storePath)
@@ -106,12 +106,13 @@ func addConfigCmd(ctx context.Context, cmd *cli.Command) error {
 		DependsOn: cmd.StringSlice(flagDependsOn),
 	}
 	if err := definition.Write(); err != nil {
-		slog.Debug("cleanup: removing store file due to failed definition write", "storePath", storePath)
+		fmt.Fprintf(os.Stderr, "cleanup: removing store file (%s) due to failed definition write", storePath)
 		os.Remove(storePath)
-		return fmt.Errorf("write definition file atomically (%s): %w", definition.filePath, err)
+		return err
 	}
-	slog.Debug("wrote definition for added config resource", "definitionPath", definition.filePath)
 
+	fmt.Fprintf(os.Stderr, "config resource %q added to definition %q\n", resourceName, definition.Name)
+	fmt.Println(resourceName)
 	return nil
 }
 
@@ -122,52 +123,90 @@ func removeConfigCmd(ctx context.Context, cmd *cli.Command) error {
 	}
 	unlock, err := definition.Lock()
 	if err != nil {
-		return fmt.Errorf("acquire definition file lock (%s): %w", definition.filePath, err)
+		return err
 	}
 	defer unlock()
 	if err := definition.Read(); err != nil {
-		return fmt.Errorf("read definition file (%s): %w", definition.filePath, err)
+		return err
 	}
 
 	resourceName := cmd.StringArg(argResourceName)
 	resource, ok := definition.Resources[resourceName]
 	if !ok {
-		return fmt.Errorf("resource '%s' doesn't exist", resourceName)
+		return errorResourceNotFound(resourceName)
 	}
 	conf := resource.Config
 	if conf == nil {
-		return fmt.Errorf("this resource exists, but is not a config")
+		return errorResourceWrongType(resourceName, "config")
 	}
 
 	// TODO: add DependsOn checks
 
-	if !conf.IsDir {
-		configDir := filepath.Join(filepath.Dir(definition.filePath), hatchConfigDir)
-		storePath := filepath.Join(configDir, conf.DestPath)
+	configDir := filepath.Join(filepath.Dir(definition.filePath), hatchConfigDir)
+	storePath := filepath.Join(configDir, conf.DestPath)
+	storePathTmp := storePath + ".tmp"
+	forceYes := cmd.Bool(flagForceYes)
 
-		var confirmed bool
-		err := huh.NewConfirm().
-			Title("Remove this configuration?").
-			Description(fmt.Sprintf("Resource name: %s\nConfig file: %s\n\nOnly the internal store will be affected.", resourceName, storePath)).
-			Affirmative("Yes").
-			Negative("No").
-			Value(&confirmed).
-			Run()
-		if err != nil {
-			return err
+	if !forceYes {
+		if !conf.IsDir {
+			var confirmed bool
+			err := huh.NewConfirm().
+				Title("Remove this configuration?").
+				Description(fmt.Sprintf("Resource name: %s\nConfig file: %s\n\nOnly the internal store will be affected.", resourceName, storePath)).
+				Affirmative("Yes").
+				Negative("No").
+				Value(&confirmed).
+				WithTheme(huh.ThemeBase16()).
+				Run()
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				return nil
+			}
+			// TODO: delete parent dirs if they're empty
+		} else {
+			var confirmed bool
+			err := huh.NewConfirm().
+				Title("Remove this configuration? (WARNING: config is a directory)").
+				Description(fmt.Sprintf(
+					"Resource name: %s\nConfig dir: %s\n\n"+
+						"Only the store will be affected.\n"+
+						"Any files manually moved to the store after this resource was created will be removed.",
+					resourceName, storePath)).
+				Affirmative("Yes").
+				Negative("No").
+				Value(&confirmed).
+				WithTheme(huh.ThemeBase16()).
+				Run()
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				return nil
+			}
 		}
-		if !confirmed {
-			return nil
-		}
-		if err := os.Remove(storePath); err != nil {
-			return fmt.Errorf("delete stored config (%s): %w", storePath, err)
-		}
+	}
 
-		// TODO: delete parent dirs if they're empty
-	} else {
-		return errors.New("not implemented")
+	if err := os.Rename(storePath, storePathTmp); err != nil {
+		return fmt.Errorf("rename stored config (%s): %w", storePath, err)
 	}
 
 	delete(definition.Resources, resourceName)
-	return definition.Write()
+	if err := definition.Write(); err != nil {
+		if err := os.Rename(storePathTmp, storePath); err != nil {
+			return fmt.Errorf("FAILED to revert config marked for deletion. Please manually rename %s to %s. err: %w", storePathTmp, storePath, err)
+		}
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "deleted config at %s; removed resource %q from hatchfile\n", storePath, resourceName)
+	fmt.Println(resourceName)
+
+	slog.Debug("deleting temp (renamed config)", "storePathTmp", storePathTmp, "isDir", conf.IsDir)
+	if conf.IsDir {
+		return os.RemoveAll(storePathTmp)
+	} else {
+		return os.Remove(storePathTmp)
+	}
 }

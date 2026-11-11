@@ -19,13 +19,17 @@ type Definition struct {
 
 type Resource struct {
 	DependsOn []string `toml:"depends_on,omitempty"`
-	// explicitly has the config struct at resource.config, rather than flattening it out
-	*Config `toml:"config,omitempty"`
+	*Config   `toml:"config,omitempty"`
+	*Command  `toml:"command,omitempty"`
 }
 
 type Config struct {
 	DestPath string `toml:"dest"`
 	IsDir    bool   `toml:"is_dir"`
+}
+
+type Command struct {
+	Run string `toml:"run"`
 }
 
 func (d *Definition) Write() error {
@@ -70,7 +74,6 @@ func (d *Definition) Lock() (func() error, error) {
 		file.Close()
 
 		if errors.Is(err, unix.EWOULDBLOCK) {
-			// TODO: perhaps block until we get the lock
 			return nil, fmt.Errorf("another hatch process has a lock on this definition (%s): %w", d.filePath, err)
 		}
 

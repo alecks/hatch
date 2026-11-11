@@ -21,10 +21,12 @@ const (
 	flagVerbose   string = "verbose"
 	flagDependsOn string = "depends"
 	flagRecursive string = "recursive"
+	flagForceYes  string = "yes"
 
 	argResourceName string = "resource"
 	argSourcePath   string = "source"
 	argDestPath     string = "dest"
+	argRunCommand   string = "command"
 
 	// 0755: owner read/write/execute, others read/execute)
 	hatchDirPerms os.FileMode = 0755
@@ -41,9 +43,10 @@ func main() {
 	}
 
 	cmd := &cli.Command{
-		Name:    "hatch",
-		Usage:   "a tool for documenting and reusing configurations on small servers and workstations",
-		Version: "0.1.0",
+		Name:                   "hatch",
+		Usage:                  "a tool for documenting and reusing configurations on small servers and workstations",
+		Version:                "0.1.0",
+		UseShortOptionHandling: true,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:        flagDir,
@@ -157,6 +160,13 @@ func main() {
 						Name:    "remove",
 						Aliases: []string{"rm"},
 						Usage:   "remove a configuration resource from the hatch definition",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    flagForceYes,
+								Usage:   "skip yes/no prompt",
+								Aliases: []string{"y"},
+							},
+						},
 						Arguments: []cli.Argument{
 							&cli.StringArg{
 								Name:      argResourceName,
@@ -165,6 +175,55 @@ func main() {
 							},
 						},
 						Action: removeConfigCmd,
+					},
+				},
+			},
+			{
+				Name:  "cmd",
+				Usage: "manage hatch-defined commands",
+				Commands: []*cli.Command{
+					{
+						Name:  "add",
+						Usage: "add a command to the hatch definition",
+						Flags: []cli.Flag{
+							&cli.StringSliceFlag{
+								Name:  flagDependsOn,
+								Usage: "names of other resources that this resource depends on",
+							},
+						},
+						Arguments: []cli.Argument{
+							&cli.StringArg{
+								Name:      argResourceName,
+								UsageText: "resource-name",
+								Required:  true,
+							},
+							&cli.StringArg{
+								Name:      argRunCommand,
+								UsageText: "command",
+								Required:  true,
+							},
+						},
+						Action: addCommandCmd,
+					},
+					{
+						Name:    "remove",
+						Aliases: []string{"rm"},
+						Usage:   "remove a command from the hatch definition",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    flagForceYes,
+								Usage:   "skip yes/no prompt",
+								Aliases: []string{"y"},
+							},
+						},
+						Arguments: []cli.Argument{
+							&cli.StringArg{
+								Name:      argResourceName,
+								UsageText: "resource-name",
+								Required:  true,
+							},
+						},
+						Action: removeCommandCmd,
 					},
 				},
 			},
